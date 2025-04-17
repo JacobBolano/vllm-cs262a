@@ -17,6 +17,11 @@ import torch.distributed
 import torch.nn as nn
 from tqdm import tqdm
 
+import datetime
+import time
+from vllm import buffered_logger
+import os
+
 import vllm.envs as envs
 from vllm.attention import AttentionMetadata, get_attn_backend
 from vllm.attention.backends.abstract import AttentionState
@@ -1690,6 +1695,14 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
     ) -> Optional[Union[List[SamplerOutput], IntermediateTensors]]:
         if num_steps > 1:
             raise ValueError("num_steps > 1 is not supported in ModelRunner")
+        
+        # buffered_logger.log_event(f"ROHAN Model_input, PID: {os.getpid()}, {model_input.request_ids_to_seq_ids}")
+
+
+        timestamp = time.time()  # Unix timestamp (synchronized)
+        utc_time = datetime.datetime.utcnow().isoformat()  # Readable time
+        if '0' not in model_input.request_ids_to_seq_ids:
+            buffered_logger.log_event(f"ROHAN Start of execute_model (Phase 1): {model_input.request_ids_to_seq_ids}, {timestamp} (Unix), {utc_time} (UTC)")
 
         if self.lora_config:
             assert model_input.lora_requests is not None
@@ -1738,8 +1751,14 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
         # In KV cache database setting, it will change the model input so that
         # we can skip prefilling on tokens that successfully received KV caches
         # NOTE: The receive operation is blocking
+
+        timestamp = time.time()  # Unix timestamp (synchronized)
+        utc_time = datetime.datetime.utcnow().isoformat()  # Readable time
+        if '0' not in model_input.request_ids_to_seq_ids:
+            buffered_logger.log_event(f"ROHAN Model Runner Before Recv KV (Phase 2): {model_input.request_ids_to_seq_ids}, {timestamp} (Unix), {utc_time} (UTC)")
         bypass_model_exec = False
         if self.need_recv_kv(model_input, kv_caches):
+            # buffered_logger.log_event(f"ROHAN Before Recv KV Caches")
             hidden_or_intermediate_states, bypass_model_exec, model_input = \
                 get_kv_transfer_group().recv_kv_caches_and_hidden_states(
                     # model is used to know which layer the current worker
@@ -1749,6 +1768,12 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
                     model_input,
                     kv_caches=kv_caches
                 )
+            # buffered_logger.log_event(f"ROHAN After Recv KV Caches")
+            
+        timestamp = time.time()  # Unix timestamp (synchronized)
+        utc_time = datetime.datetime.utcnow().isoformat()  # Readable time
+        if '0' not in model_input.request_ids_to_seq_ids:
+            buffered_logger.log_event(f"ROHAN GPU Request Resume (Phase 3): {model_input.request_ids_to_seq_ids}, {timestamp} (Unix), {utc_time} (UTC)")
 
         multi_modal_kwargs = model_input.multi_modal_kwargs or {}
         seqlen_agnostic_kwargs = {
@@ -1782,7 +1807,11 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
             model_forward_end.record()
 
         # Sending KV cache in distributed KV cache transfer setting
-        # NOTE: the send operation is non-blocking
+        # NOTE: the send operation is non-blocking # NOTE: might be cap???
+        timestamp = time.time()  # Unix timestamp (synchronized)
+        utc_time = datetime.datetime.utcnow().isoformat()  # Readable time
+        if '0' not in model_input.request_ids_to_seq_ids:
+            buffered_logger.log_event(f"ROHAN Model Runner Before Send KV (Phase 4): {model_input.request_ids_to_seq_ids}, {timestamp} (Unix), {utc_time} (UTC)")
         if self.need_send_kv(model_input, kv_caches):
             get_kv_transfer_group().send_kv_caches_and_hidden_states(
                 # model_executable is used to know which layer the current
@@ -1793,6 +1822,11 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
                 kv_caches,
                 hidden_or_intermediate_states,
             )
+
+        timestamp = time.time()  # Unix timestamp (synchronized)
+        utc_time = datetime.datetime.utcnow().isoformat()  # Readable time
+        if '0' not in model_input.request_ids_to_seq_ids:
+            buffered_logger.log_event(f"ROHAN Model Runner After Send KV (Phase 5): {model_input.request_ids_to_seq_ids}, {timestamp} (Unix), {utc_time} (UTC)")
 
         # Compute the logits in the last pipeline stage.
         if not get_pp_group().is_last_rank:
@@ -1859,6 +1893,10 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
 
             output.hidden_states = hidden_states
 
+        timestamp = time.time()  # Unix timestamp (synchronized)
+        utc_time = datetime.datetime.utcnow().isoformat()  # Readable time
+        if '0' not in model_input.request_ids_to_seq_ids:
+            buffered_logger.log_event(f"ROHAN End of execute_model (Phase 6): {model_input.request_ids_to_seq_ids}, {timestamp} (Unix), {utc_time} (UTC)")
         return [output]
 
     def need_recv_kv(self, model_input, kv_caches) -> bool:

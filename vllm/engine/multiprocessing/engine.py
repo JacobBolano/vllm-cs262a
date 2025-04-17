@@ -7,6 +7,9 @@ from typing import Iterator, List, Optional, Union
 
 import cloudpickle
 import zmq
+import time
+import datetime
+import os
 
 from vllm import AsyncEngineArgs, SamplingParams
 from vllm.config import VllmConfig
@@ -33,6 +36,9 @@ from vllm.transformers_utils.config import (
     maybe_register_config_serialize_by_value)
 from vllm.usage.usage_lib import UsageContext
 from vllm.worker.model_runner_base import InputProcessingError
+
+# cs262A Logging:
+from vllm import buffered_logger
 
 logger = init_logger(__name__)
 
@@ -106,6 +112,9 @@ class MQLLMEngine:
 
         # Error state.
         self._errored_with: Optional[BaseException] = None
+
+        self.preCount = 0
+        self.deCount = 0
 
     @property
     def dead_error(self) -> BaseException:
@@ -220,6 +229,13 @@ class MQLLMEngine:
             # Engine step.
             request_outputs = self.engine_step()
 
+            #commented out because the request_outputs was empty every time
+            # timestamp = time.time()  # Unix timestamp (synchronized)
+            # utc_time = datetime.datetime.utcnow().isoformat()  # Readable time
+            # logger.info(f"SHRI Request CTX Length {len(request_outputs)} has finished at {timestamp}")
+            # for req_output in request_outputs:
+            #     logger.info(f"SHRI Request CTX Request ID {req_output.request_id} has finished at {timestamp} on PID: {os.getpid()}")
+
             # Send request outputs (if async, done in engine_step callback).
             if not self.use_async_sockets:
                 self._send_outputs(request_outputs)
@@ -260,6 +276,21 @@ class MQLLMEngine:
                         lprocs = cloudpickle.loads(frames[1].buffer)
                         request.params.logits_processors = lprocs
                     self._handle_process_request(request)
+
+                    timestamp = time.time() 
+                    utc_time = datetime.datetime.utcnow().isoformat()  
+
+                    if request.params.max_tokens == 1:
+                        # Prefill
+                        buffered_logger.log_event(f"SHRI Prefill Request {request.request_id} Number {self.preCount}, Start at {timestamp}")
+                        logger.info(f"SHRI Prefill Request {request.request_id} Number {self.preCount}, Start at {timestamp}")
+                        self.preCount += 1
+                    else:
+                        # decode
+                        buffered_logger.log_event(f"SHRI Decode Request {request.request_id} Number {self.deCount}, Start at {timestamp}")
+                        logger.info(f"SHRI Decode Request {request.request_id} Number {self.deCount}, Start at {timestamp}")
+                        self.deCount += 1
+
                 elif isinstance(request, RPCAbortRequest):
                     self._handle_abort_request(request)
                 elif isinstance(request, RPCUProfileRequest):
@@ -280,6 +311,7 @@ class MQLLMEngine:
                 else:
                     raise ValueError("Unknown RPCRequest Type: "
                                      f"{type(request)}")
+            buffered_logger.flush_log_buffer()
 
         except Exception as e:
             self._set_errored(e)
