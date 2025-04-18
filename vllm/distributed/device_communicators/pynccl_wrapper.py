@@ -33,6 +33,9 @@ from vllm.logger import init_logger
 from vllm.utils import find_nccl_library
 
 logger = init_logger(__name__)
+from vllm import buffered_logger
+import time
+import datetime
 
 # === export types and functions from nccl to Python ===
 # for the original nccl definition, please check
@@ -254,6 +257,9 @@ class NCCLLibrary:
         if result != 0:
             error_str = self.ncclGetErrorString(result)
             raise RuntimeError(f"NCCL error: {error_str}")
+        timestamp = time.time()  # Unix timestamp (synchronized)
+        utc_time = datetime.datetime.utcnow().isoformat()  # Readable time
+        buffered_logger.log_event(f"ROHAN After ncclSend: {timestamp} (Unix), {utc_time} (UTC)")
 
     def ncclGetVersion(self) -> str:
         version = ctypes.c_int()
@@ -315,8 +321,16 @@ class NCCLLibrary:
 
     def ncclSend(self, sendbuff: buffer_type, count: int, datatype: int,
                  dest: int, comm: ncclComm_t, stream: cudaStream_t) -> None:
+        # timestamp = time.time()  # Unix timestamp (synchronized)
+        # utc_time = datetime.datetime.utcnow().isoformat()  # Readable time
+        # buffered_logger.log_event(f"ROHAN Before ncclSend: {timestamp} (Unix), {utc_time} (UTC)")
+
         self.NCCL_CHECK(self._funcs["ncclSend"](sendbuff, count, datatype,
                                                 dest, comm, stream))
+        
+        # timestamp = time.time()  # Unix timestamp (synchronized)
+        # utc_time = datetime.datetime.utcnow().isoformat()  # Readable time
+        # buffered_logger.log_event(f"ROHAN After ncclSend: {timestamp} (Unix), {utc_time} (UTC)")
 
     def ncclRecv(self, recvbuff: buffer_type, count: int, datatype: int,
                  src: int, comm: ncclComm_t, stream: cudaStream_t) -> None:

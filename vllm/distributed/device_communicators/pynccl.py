@@ -16,6 +16,10 @@ from vllm.utils import current_stream
 
 logger = init_logger(__name__)
 
+from vllm import buffered_logger
+import time
+import datetime
+
 
 class PyNcclCommunicator:
 
@@ -181,9 +185,43 @@ class PyNcclCommunicator:
             f"but the input tensor is on {tensor.device}")
         if stream is None:
             stream = current_stream()
+
         self.nccl.ncclSend(buffer_type(tensor.data_ptr()), tensor.numel(),
                            ncclDataTypeEnum.from_torch(tensor.dtype), dst,
                            self.comm, cudaStream_t(stream.cuda_stream))
+
+    # def send(self, tensor: torch.Tensor, dst: int, stream=None):
+    #     if self.disabled:
+    #         return
+    #     assert tensor.device == self.device, (
+    #         f"this nccl communicator is created to work on {self.device}, "
+    #         f"but the input tensor is on {tensor.device}"
+    #     )
+    #     if stream is None:
+    #         stream = current_stream()
+
+    #     # create start/end CUDA events
+    #     start_evt = torch.cuda.Event(enable_timing=True)
+    #     end_evt   = torch.cuda.Event(enable_timing=True)
+
+    #     # record, do NCCL send, record again
+    #     start_evt.record(stream)
+    #     self.nccl.ncclSend(
+    #         buffer_type(tensor.data_ptr()),
+    #         tensor.numel(),
+    #         ncclDataTypeEnum.from_torch(tensor.dtype),
+    #         dst, self.comm, cudaStream_t(stream.cuda_stream)
+    #     )
+    #     end_evt.record(stream)
+
+    #     # make sure both events have actually been issued
+    #     stream.synchronize()
+
+    #     # measure elapsed time in milliseconds
+    #     ms = start_evt.elapsed_time(end_evt)
+    #     buffered_logger.log_event(f"JACOB [rank{torch.distributed.get_rank()}] "f"NCCL send to {dst}: {ms:.2f} ms")
+        
+        
 
     def recv(self, tensor: torch.Tensor, src: int, stream=None):
         if self.disabled:
