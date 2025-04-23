@@ -285,11 +285,20 @@ class MQLLMEngine:
                         buffered_logger.log_event(f"SHRI Prefill Request {request.request_id} Number {self.preCount}, Start at {timestamp}")
                         logger.info(f"SHRI Prefill Request {request.request_id} Number {self.preCount}, Start at {timestamp}")
                         self.preCount += 1
+
+                        if self.preCount == 10:
+                            print("SHANKAR: CUDA PREFILL FLUSH")
+                            buffered_logger.cuda_flush()
                     else:
                         # decode
                         buffered_logger.log_event(f"SHRI Decode Request {request.request_id} Number {self.deCount}, Start at {timestamp}")
                         logger.info(f"SHRI Decode Request {request.request_id} Number {self.deCount}, Start at {timestamp}")
                         self.deCount += 1
+
+                        # Shankar: attempting to flush all of the cude events
+                        if self.deCount == 10:
+                            print("SHANKAR: CUDA DECODE FLUSH")
+                            buffered_logger.cuda_flush()
 
                 elif isinstance(request, RPCAbortRequest):
                     self._handle_abort_request(request)

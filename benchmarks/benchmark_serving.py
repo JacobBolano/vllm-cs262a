@@ -432,6 +432,7 @@ async def benchmark(
 
     buffered_logger.flush_log_buffer()
 
+
     result = {
         "duration": benchmark_duration,
         "completed": metrics.completed,

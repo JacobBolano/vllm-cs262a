@@ -1091,7 +1091,7 @@ class LLMEngine:
                 return
         else:
             indices = range(len(seq_group_metadata_list))  # type: ignore
-            logger.info(f"SHANKAR indices: {indices}")
+            # logger.info(f"SHANKAR indices: {indices}")
 
         finished_before: List[int] = []
         finished_now: List[int] = []
@@ -1528,7 +1528,7 @@ class LLMEngine:
             return ctx.request_outputs
 
         if not self.has_unfinished_requests():
-            logger.info("SHANKAR: when does has_unfinished_reqs activate? SECOND process model outputs")
+            # logger.info("SHANKAR: when does has_unfinished_reqs activate? SECOND process model outputs")
             # Drain async postprocessor (if exists)
             if len(ctx.output_queue) > 0:
                 self._process_model_outputs(ctx=ctx)

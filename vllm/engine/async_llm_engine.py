@@ -36,7 +36,7 @@ from vllm.sequence import ExecuteModelRequest
 from vllm.transformers_utils.tokenizer import AnyTokenizer
 from vllm.usage.usage_lib import UsageContext
 from vllm.utils import Device, deprecate_kwargs, weak_bind
-
+from vllm import buffered_logger
 logger = init_logger(__name__)
 ENGINE_ITERATION_TIMEOUT_S = envs.VLLM_ENGINE_ITERATION_TIMEOUT_S
 
@@ -751,6 +751,10 @@ class AsyncLLMEngine(EngineClient):
         by the async LLM engine (e.g., the executors as well as
         their resources).
         """
+        # print("SHANKAR: CUDA FLUSH")
+        # buffered_logger.cuda_flush()
+
+
         if self._background_loop_unshielded is not None:
             self._background_loop_unshielded.cancel()
             self._background_loop_unshielded = None
