@@ -1,5 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
+# cs262a imports
+import os
+import datetime
+from vllm import buffered_logger
+
 import copy
 import time
 from collections import Counter as collectionsCounter
@@ -1086,6 +1091,7 @@ class LLMEngine:
                 return
         else:
             indices = range(len(seq_group_metadata_list))  # type: ignore
+            # logger.info(f"SHANKAR indices: {indices}")
 
         finished_before: List[int] = []
         finished_now: List[int] = []
@@ -1159,6 +1165,13 @@ class LLMEngine:
                 use_cache=self.use_cached_outputs)
             if request_output:
                 ctx.request_outputs.append(request_output)
+                logger.info(f"Shri CTX Request Outputs: {ctx.request_outputs}")
+                timestamp = time.time()  # Unix timestamp (synchronized)
+                utc_time = datetime.datetime.utcnow().isoformat()  # Readable time
+                logger.info(f"SHRI Finished Request ID {request_output.request_id} at {timestamp} on PID: {os.getpid()} with {request_output.outputs}")
+                buffered_logger.log_event(f"SHRI Finished Request ID {request_output.request_id} at {timestamp} on PID: {os.getpid()} with {request_output.outputs}")
+            else:
+                logger.info("SHANKAR FAILED TO ADD")
 
         # When we process a single request, we skip it for the next time,
         # and invoke the request output callback (if there was final output)
@@ -1404,6 +1417,14 @@ class LLMEngine:
 
         if not scheduler_outputs.is_empty():
 
+            # logger.info(f"ROHAN Engine Step Request Queue Length: {len(seq_group_metadata_list)}")
+            if len(seq_group_metadata_list) > 0:
+                for seq_group_metadata in seq_group_metadata_list:
+                    timestamp = time.time()  # Unix timestamp (synchronized)
+                    utc_time = datetime.datetime.utcnow().isoformat()  # Readable time``
+                    # logger.info(f"ROHAN Start of Engine Step Request ID: {seq_group_metadata.request_id} ON PID: {os.getpid()} at: {timestamp} in batch size {len(seq_group_metadata_list)}")
+                    buffered_logger.log_event(f"ROHAN Start of Engine Step Request ID: {seq_group_metadata.request_id} ON PID: {os.getpid()} at: {timestamp} in batch size {len(seq_group_metadata_list)}")
+
             # Check if we have a cached last_output from the previous iteration.
             # For supporting PP this is probably the best way to pass the
             # sampled_token_ids, as a separate broadcast over all the PP stages
@@ -1428,8 +1449,12 @@ class LLMEngine:
                     virtual_engine]
 
             try:
+                # buffered_logger.log_event(f"SHANKAR: class of model_executor: {type(self.model_executor)}")
+                # buffered_logger.log_event(f"SHANKAR execute_model_req: {execute_model_req}")
                 outputs = self.model_executor.execute_model(
                     execute_model_req=execute_model_req)
+                
+                        
                 self._skip_scheduling_next_step = False
             except InputProcessingError as e:
                 # The input for this request cannot be processed, so we must
@@ -1503,6 +1528,7 @@ class LLMEngine:
             return ctx.request_outputs
 
         if not self.has_unfinished_requests():
+            logger.info("SHANKAR: when does has_unfinished_reqs activate? SECOND process model outputs")
             # Drain async postprocessor (if exists)
             if len(ctx.output_queue) > 0:
                 self._process_model_outputs(ctx=ctx)

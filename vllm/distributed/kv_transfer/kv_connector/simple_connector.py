@@ -11,6 +11,9 @@ But the logic can be extended to support other pipe and lookup buffer.
 from typing import TYPE_CHECKING, List, Optional, Tuple, Union
 
 import torch
+import os
+import time
+import datetime
 
 import vllm.envs as envs
 from vllm import _custom_ops as ops
@@ -20,6 +23,8 @@ from vllm.distributed.kv_transfer.kv_lookup_buffer.simple_buffer import (
     SimpleBuffer)
 from vllm.logger import init_logger
 from vllm.sequence import IntermediateTensors
+
+from vllm import buffered_logger
 
 if TYPE_CHECKING:
     from vllm.worker.model_runner import ModelInputForGPUWithSamplingMetadata
@@ -137,6 +142,9 @@ class SimpleConnector(KVConnectorBase):
     def select(self, input_tokens: Optional[torch.Tensor],
                roi: Optional[torch.Tensor]) -> List[Optional[torch.Tensor]]:
 
+        #select is only called by decode instance
+        # logger.info("ROHAN: select called with %d PID", os.getpid())
+
         assert self.consumer_buffer is not None, "Please initialize the "\
             "consumer buffer before calling select."
         return self.consumer_buffer.drop_select(input_tokens, roi)
@@ -144,6 +152,9 @@ class SimpleConnector(KVConnectorBase):
     def insert(self, input_tokens: torch.Tensor, roi: torch.Tensor,
                key: torch.Tensor, value: torch.Tensor,
                hidden: torch.Tensor) -> None:
+
+        # insert is only called by prefill instance
+        # logger.info("ROHAN: insert called with %d PID", os.getpid())
 
         assert self.producer_buffer is not None, "Please initialize the "\
             "producer buffer before calling insert."
@@ -158,6 +169,10 @@ class SimpleConnector(KVConnectorBase):
         hidden_or_intermediate_states: Union[torch.Tensor,
                                              IntermediateTensors],
     ) -> None:
+
+        timestamp = time.time()  # Unix timestamp (synchronized)
+        utc_time = datetime.datetime.utcnow().isoformat()  # Readable time
+        buffered_logger.log_event(f"ROHAN Start of Send KV Caches: {timestamp} (Unix), {utc_time} (UTC)")
 
         input_tokens_tensor = model_input.input_tokens
         seq_lens = model_input.attn_metadata.seq_lens
@@ -233,6 +248,10 @@ class SimpleConnector(KVConnectorBase):
                                         dtype=bool), keys, values,
                         hidden_or_intermediate_states[start_pos:end_pos])
 
+        timestamp = time.time()  # Unix timestamp (synchronized)
+        utc_time = datetime.datetime.utcnow().isoformat()  # Readable time
+        buffered_logger.log_event(f"ROHAN End of Send KV Caches: {timestamp} (Unix), {utc_time} (UTC)")
+
         logger.debug("[rank%d]: KV send DONE.", torch.distributed.get_rank())
 
     def recv_kv_caches_and_hidden_states(
@@ -246,10 +265,14 @@ class SimpleConnector(KVConnectorBase):
         # request its corresponding KV cache or hidden state is missing.
         # In this case we need to do prefilling to recompute missing KV cache
         # and hidden states.
+        timestamp = time.time()  # Unix timestamp (synchronized)
+        utc_time = datetime.datetime.utcnow().isoformat()  # Readable time
+        buffered_logger.log_event(f"ROHAN Start of Recv KV Caches: {timestamp} (Unix), {utc_time} (UTC)")
+
         bypass_model_exec = True
 
         model_config = model_executable.model.config
-
+ 
         input_tokens_tensor = model_input.input_tokens
         seq_lens = model_input.attn_metadata.seq_lens
         num_prefill_tokens = model_input.attn_metadata.num_prefill_tokens
@@ -298,6 +321,12 @@ class SimpleConnector(KVConnectorBase):
             keys: torch.Tensor = ret[2]
             values: torch.Tensor = ret[3]
             hidden: torch.Tensor = ret[4]
+            
+            # logger.info(f"CONNECTOR INPUT TOKENS: {ret[0]}")
+            # logger.info(f"CONNECTOR ROI: {roi.size()}")
+            # logger.info(f"CONNECTOR KEYS: {keys.size()}")
+            # logger.info(f"CONNECTOR VALUES: {values.size()}")
+            # logger.info(f"CONNECTOR HIDDEN: {hidden.size()}")
 
             num_computed_tokens = roi.shape[0]
             num_computed_tokens_list.append(num_computed_tokens)
@@ -306,6 +335,9 @@ class SimpleConnector(KVConnectorBase):
             # If not, need to redo the forwarding to compute missing states
             if not all([(num_computed_tokens == num_tokens), hidden is not None
                         ]):
+                logger.info(f"NUM COMPUTED TOKENS: {num_computed_tokens}")
+                logger.info(f"NUM TOKENS: {num_tokens}")
+                logger.info(f"HIDDEN: {hidden}")
                 bypass_model_exec = False
 
             # update the end position based on how many tokens are cached.
@@ -367,6 +399,10 @@ class SimpleConnector(KVConnectorBase):
             hidden_or_intermediate_states = torch.cat(
                 hidden_or_intermediate_states_for_one_req, dim=0)
 
+
+        timestamp = time.time()  # Unix timestamp (synchronized)
+        utc_time = datetime.datetime.utcnow().isoformat()  # Readable time
+        logger.info(f"ROHAN End of Recv KV Caches: {timestamp} (Unix), {utc_time} (UTC)")
         return hidden_or_intermediate_states, bypass_model_exec, model_input
 
     def close(self):

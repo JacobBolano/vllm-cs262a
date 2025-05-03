@@ -2,6 +2,7 @@
 
 import asyncio
 import itertools
+import argparse
 
 import aiohttp
 from aiohttp import web
@@ -42,21 +43,58 @@ class RoundRobinProxy:
                 return web.Response(text=f"Error: {str(e)}", status=500)
 
 
-async def main():
-    proxy = RoundRobinProxy([8100, 8200])
+# async def main():
+#     proxy = RoundRobinProxy([8100, 8200, 8300, 8400])
+#     app = web.Application()
+#     app.router.add_route('*', '/{path:.*}', proxy.handle_request)
+
+#     runner = web.AppRunner(app)
+#     await runner.setup()
+#     site = web.TCPSite(runner, 'localhost', 8001)
+#     await site.start()
+
+#     print("Proxy server started on http://localhost:8001")
+
+#     # Keep the server running
+#     await asyncio.Event().wait()
+
+
+# if __name__ == '__main__':
+#     asyncio.run(main())
+
+async def main(backend_ports, listen_port):
+    proxy = RoundRobinProxy(backend_ports)
+
     app = web.Application()
+    app['session'] = aiohttp.ClientSession()
     app.router.add_route('*', '/{path:.*}', proxy.handle_request)
 
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, 'localhost', 8000)
+    site = web.TCPSite(runner, 'localhost', listen_port)
     await site.start()
 
-    print("Proxy server started on http://localhost:8000")
-
-    # Keep the server running
+    print(f"Proxy server started on http://localhost:{listen_port}")
     await asyncio.Event().wait()
 
-
 if __name__ == '__main__':
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(
+        description="Start a simple round-robin HTTP proxy."
+    )
+    parser.add_argument(
+        '--ports', '-b',
+        nargs='+',
+        type=int,
+        required=True,
+        help="List of backend ports to round-robin between"
+    )
+    parser.add_argument(
+        '--listen-port', '-l',
+        type=int,
+        default=8001,
+        help="Port on which the proxy will listen (default: 8001)"
+    )
+    args = parser.parse_args()
+
+    # Run the proxy
+    asyncio.run(main(args.ports, args.listen_port))

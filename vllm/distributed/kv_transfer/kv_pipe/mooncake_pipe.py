@@ -31,6 +31,7 @@ class MooncakeTransferEngineConfig:
     @staticmethod
     def from_file(file_path: str) -> 'MooncakeTransferEngineConfig':
         """Load the config from a JSON file."""
+        print("SHANKAR: File path for mooncake", file_path)
         with open(file_path) as fin:
             config = json.load(fin)
         return MooncakeTransferEngineConfig(

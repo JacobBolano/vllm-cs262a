@@ -37,6 +37,7 @@ from vllm.transformers_utils.tokenizer import AnyTokenizer
 from vllm.usage.usage_lib import UsageContext
 from vllm.utils import Device, deprecate_kwargs, weak_bind
 
+from vllm import buffered_logger
 logger = init_logger(__name__)
 ENGINE_ITERATION_TIMEOUT_S = envs.VLLM_ENGINE_ITERATION_TIMEOUT_S
 
@@ -933,6 +934,8 @@ class AsyncLLMEngine(EngineClient):
 
         if not self.is_running:
             if self.start_engine_loop:
+                buffered_logger.log_event(f"shankar: started engine loop CP")
+                buffered_logger.flush_log_buffer()
                 self.start_background_loop()
             else:
                 raise AsyncEngineDeadError(

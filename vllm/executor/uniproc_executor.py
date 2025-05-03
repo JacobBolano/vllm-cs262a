@@ -13,6 +13,7 @@ from vllm.utils import (get_distributed_init_method, get_ip, get_open_port,
                         run_method)
 from vllm.worker.worker_base import WorkerWrapperBase
 
+from vllm import buffered_logger
 logger = init_logger(__name__)
 
 
@@ -25,6 +26,7 @@ class UniProcExecutor(ExecutorBase):
         """
         self.driver_worker = WorkerWrapperBase(vllm_config=self.vllm_config,
                                                rpc_rank=0)
+        buffered_logger.log_event(f"SHANKAR: WorkerWrapperBase class exploration: {self.vllm_config}")
         distributed_init_method = get_distributed_init_method(
             get_ip(), get_open_port())
         local_rank = 0
@@ -53,6 +55,8 @@ class UniProcExecutor(ExecutorBase):
                        kwargs: Optional[Dict] = None) -> List[Any]:
         if kwargs is None:
             kwargs = {}
+        
+        buffered_logger.log_event(f"SHANKAR: method for collective RPC: {method}")
         answer = run_method(self.driver_worker, method, args, kwargs)
         return [answer]
 

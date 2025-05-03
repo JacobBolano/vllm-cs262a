@@ -22,7 +22,7 @@ from vllm.sequence import (Sequence, SequenceData, SequenceGroup,
 from vllm.utils import Device, PyObjectCache
 
 logger = init_logger(__name__)
-
+from vllm import buffered_logger
 # Test-only. If configured, decode is preempted with
 # ARTIFICIAL_PREEMPTION_PROB% probability.
 ENABLE_ARTIFICIAL_PREEMPT = bool(
@@ -1493,6 +1493,8 @@ class Scheduler:
     def schedule(
             self
     ) -> Tuple[List[SequenceGroupMetadata], SchedulerOutputs, bool]:
+        buffered_logger.log_event("inside CP scheduler")
+        buffered_logger.flush_log_buffer()
         # Schedule sequence groups.
         # This function call changes the internal states of the scheduler
         # such as self.running, self.swapped, and self.waiting.

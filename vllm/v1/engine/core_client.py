@@ -68,6 +68,8 @@ class EngineCoreClient(ABC):
             if vllm_config.parallel_config.data_parallel_size > 1:
                 return DPAsyncMPClient(vllm_config, executor_class, log_stats)
 
+            buffered_logger.log_event(f"shankar: CP choosing AsyncMPCli")
+            buffered_logger.flush_log_buffer()
             return AsyncMPClient(vllm_config, executor_class, log_stats)
 
         if multiprocess_mode and not asyncio_mode:
@@ -595,7 +597,7 @@ class SyncMPClient(MPClient):
                            max_size: Optional[int] = None) -> None:
         self.call_utility("save_sharded_state", path, pattern, max_size)
 
-
+from vllm import buffered_logger
 class AsyncMPClient(MPClient):
     """Asyncio-compatible client for multi-proc EngineCore."""
 
@@ -607,7 +609,8 @@ class AsyncMPClient(MPClient):
             executor_class=executor_class,
             log_stats=log_stats,
         )
-
+        buffered_logger.log_event(f"shankar: CP init AsyncMPClient")
+        buffered_logger.flush_log_buffer()
         self.outputs_queue: Optional[asyncio.Queue[EngineCoreOutputs]] = None
         self.queue_task: Optional[asyncio.Task] = None
 

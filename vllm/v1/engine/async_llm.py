@@ -38,6 +38,7 @@ from vllm.v1.metrics.loggers import (LoggingStatLogger, PrometheusStatLogger,
                                      StatLoggerBase)
 from vllm.v1.metrics.stats import IterationStats, SchedulerStats
 
+from vllm import buffered_logger
 logger = init_logger(__name__)
 
 
@@ -99,6 +100,9 @@ class AsyncLLM(EngineClient):
                                                 log_stats=self.log_stats)
 
         # EngineCore (starts the engine in background process).
+        
+        buffered_logger.log_event("engine core client make client")
+        buffered_logger.flush_log_buffer()
         self.engine_core = EngineCoreClient.make_client(
             multiprocess_mode=True,
             asyncio_mode=True,
@@ -222,6 +226,8 @@ class AsyncLLM(EngineClient):
         self.output_processor.add_request(request, parent_req, index, queue)
 
         # Add the EngineCoreRequest to EngineCore (separate process).
+        buffered_logger.log_event(f"async add request: {request}")
+        buffered_logger.flush_log_buffer()
         await self.engine_core.add_request_async(request)
 
         if self.log_requests:

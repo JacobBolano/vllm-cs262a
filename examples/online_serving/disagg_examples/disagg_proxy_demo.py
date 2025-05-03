@@ -275,6 +275,7 @@ class Proxy:
                 self.remove_instance_endpoint("decode", decode_instance)
                 raise http_exc
             response = StreamingResponse(generator)
+            print("SHANKAR THIS IS A RESPONSE:", response)
             return response
         except Exception:
             import sys

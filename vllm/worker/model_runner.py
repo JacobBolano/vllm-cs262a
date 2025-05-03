@@ -17,6 +17,11 @@ import torch.distributed
 import torch.nn as nn
 from tqdm import tqdm
 
+import datetime
+import time
+from vllm import buffered_logger
+import os
+
 import vllm.envs as envs
 from vllm.attention import AttentionMetadata, get_attn_backend
 from vllm.attention.backends.abstract import AttentionState
@@ -1690,7 +1695,14 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
     ) -> Optional[Union[List[SamplerOutput], IntermediateTensors]]:
         if num_steps > 1:
             raise ValueError("num_steps > 1 is not supported in ModelRunner")
+        
+        # buffered_logger.log_event(f"ROHAN Model_input, PID: {os.getpid()}, {model_input.request_ids_to_seq_ids}")
 
+
+        timestamp = time.time()  # Unix timestamp (synchronized)
+        utc_time = datetime.datetime.utcnow().isoformat()  # Readable time
+        if '0' not in model_input.request_ids_to_seq_ids:
+            buffered_logger.log_event(f"ROHAN Start of execute_model (PID: {os.getpid()}) (is prefill: {model_input.attn_metadata.prefill_metadata is not None}) (Phase 1): {model_input.request_ids_to_seq_ids}, {timestamp} (Unix), {utc_time} (UTC)")
         if self.lora_config:
             assert model_input.lora_requests is not None
             assert model_input.lora_mapping is not None
@@ -1704,12 +1716,14 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
                 model_input.prompt_adapter_requests,
                 model_input.prompt_adapter_mapping)
 
+        
         self.attn_state.begin_forward(model_input)
 
         # Currently cuda graph is only supported by the decode phase.
         assert model_input.attn_metadata is not None
         prefill_meta = model_input.attn_metadata.prefill_metadata
         decode_meta = model_input.attn_metadata.decode_metadata
+        # buffered_logger.log_event(f"SHANKAR: prefill meta is: {prefill_meta}. and decode meta is: {decode_meta}")
         # TODO(andoorve): We can remove this once all
         # virtual engines share the same kv cache.
         virtual_engine = model_input.virtual_engine
@@ -1738,8 +1752,14 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
         # In KV cache database setting, it will change the model input so that
         # we can skip prefilling on tokens that successfully received KV caches
         # NOTE: The receive operation is blocking
+
+        timestamp = time.time()  # Unix timestamp (synchronized)
+        utc_time = datetime.datetime.utcnow().isoformat()  # Readable time
+        if '0' not in model_input.request_ids_to_seq_ids:
+            buffered_logger.log_event(f"PID: {os.getpid()} ROHAN Model Runner Before Recv KV (is prefill: {model_input.attn_metadata.prefill_metadata is not None}) (Phase 2): {model_input.request_ids_to_seq_ids}, {timestamp} (Unix), {utc_time} (UTC)")
         bypass_model_exec = False
         if self.need_recv_kv(model_input, kv_caches):
+            # buffered_logger.log_event(f"ROHAN Before Recv KV Caches")
             hidden_or_intermediate_states, bypass_model_exec, model_input = \
                 get_kv_transfer_group().recv_kv_caches_and_hidden_states(
                     # model is used to know which layer the current worker
@@ -1749,6 +1769,14 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
                     model_input,
                     kv_caches=kv_caches
                 )
+            # buffered_logger.log_event(f"PID: {os.getpid()} ROHAN After Recv KV Caches Shape: {hidden_or_intermediate_states.size()}")
+            # buffered_logger.flush_log_buffer()
+            
+        timestamp = time.time()  # Unix timestamp (synchronized)
+        utc_time = datetime.datetime.utcnow().isoformat()  # Readable time
+        if '0' not in model_input.request_ids_to_seq_ids:
+            buffered_logger.log_event(f"PID: {os.getpid()} ROHAN GPU Request Resume (is prefill: {model_input.attn_metadata.prefill_metadata is not None}) (Phase 3): {model_input.request_ids_to_seq_ids}, {timestamp} (Unix), {utc_time} (UTC)")
+            
 
         multi_modal_kwargs = model_input.multi_modal_kwargs or {}
         seqlen_agnostic_kwargs = {
@@ -1782,7 +1810,12 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
             model_forward_end.record()
 
         # Sending KV cache in distributed KV cache transfer setting
-        # NOTE: the send operation is non-blocking
+        # NOTE: the send operation is non-blocking # NOTE: might be cap???
+        timestamp = time.time()  # Unix timestamp (synchronized)
+        utc_time = datetime.datetime.utcnow().isoformat()  # Readable time
+        if '0' not in model_input.request_ids_to_seq_ids:
+            buffered_logger.log_event(f"ROHAN Model Runner Before Send KV (is prefill: {model_input.attn_metadata.prefill_metadata is not None}) (Phase 4): {model_input.request_ids_to_seq_ids}, {timestamp} (Unix), {utc_time} (UTC)")
+            
         if self.need_send_kv(model_input, kv_caches):
             get_kv_transfer_group().send_kv_caches_and_hidden_states(
                 # model_executable is used to know which layer the current
@@ -1793,6 +1826,11 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
                 kv_caches,
                 hidden_or_intermediate_states,
             )
+
+        timestamp = time.time()  # Unix timestamp (synchronized)
+        utc_time = datetime.datetime.utcnow().isoformat()  # Readable time
+        if '0' not in model_input.request_ids_to_seq_ids:
+            buffered_logger.log_event(f"ROHAN Model Runner After Send KV (is prefill: {model_input.attn_metadata.prefill_metadata is not None}) (Phase 5): {model_input.request_ids_to_seq_ids}, {timestamp} (Unix), {utc_time} (UTC)")
 
         # Compute the logits in the last pipeline stage.
         if not get_pp_group().is_last_rank:
@@ -1815,18 +1853,24 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
 
         logits = self.model.compute_logits(hidden_or_intermediate_states,
                                            model_input.sampling_metadata)
+        
+        buffered_logger.log_event(f"ROHAN Model Runner Done Computing Logits: {model_input.request_ids_to_seq_ids}")
 
         if not self.is_driver_worker:
             return []
-
         if model_input.async_callback is not None:
             model_input.async_callback()
 
+            buffered_logger.log_event("ROHAN ASYNC CALLBACK FINISHED")
+            
         # Sample the next token.
         output: SamplerOutput = self.model.sample(
             logits=logits,
             sampling_metadata=model_input.sampling_metadata,
         )
+
+        buffered_logger.log_event(f"ROHAN Sampled Next Token")
+        
         if (self.observability_config is not None
                 and self.observability_config.collect_model_forward_time
                 and output is not None):
@@ -1843,6 +1887,9 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
             # the communication time as well.
             output.model_forward_time = (orig_model_forward_time +
                                          model_forward_time)
+            
+        buffered_logger.log_event(f"ROHAN Collecting Forward Time {model_input.request_ids_to_seq_ids}, {timestamp} (Unix), {utc_time} (UTC)")
+        
 
         if self.return_hidden_states:
             # we only need to pass hidden states of most recent token
@@ -1859,6 +1906,11 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
 
             output.hidden_states = hidden_states
 
+        timestamp = time.time()  # Unix timestamp (synchronized)
+        utc_time = datetime.datetime.utcnow().isoformat()  # Readable time
+        if '0' not in model_input.request_ids_to_seq_ids:
+            buffered_logger.log_event(f"ROHAN End of execute_model (PID: {os.getpid()}) (is prefill: {model_input.attn_metadata.prefill_metadata is not None}) (Phase 6): {model_input.request_ids_to_seq_ids}, {timestamp} (Unix), {utc_time} (UTC)")
+            buffered_logger.flush_log_buffer()
         return [output]
 
     def need_recv_kv(self, model_input, kv_caches) -> bool:

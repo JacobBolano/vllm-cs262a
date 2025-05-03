@@ -24,6 +24,10 @@ DEFAULT_LOCAL_BUFFER_SIZE = 1073741824  # 1.0 GiB
 
 logger = init_logger(__name__)
 
+from vllm import buffered_logger
+import time
+import datetime
+
 
 @dataclass
 class MooncakeStoreConfig:
@@ -125,6 +129,10 @@ class MooncakeStore(KVStoreBufferBase):
         value: torch.Tensor,
     ) -> None:
         """Put KVCache to Mooncake Store"""
+        timestamp = time.time()  # Unix timestamp (synchronized)
+        utc_time = datetime.datetime.utcnow().isoformat()  # Readable time
+        buffered_logger.log_event(f"ROHAN Prefill Begins Drop Select Handler: {timestamp} (Unix), {utc_time} (UTC)")
+
         device_id = value.device.index if value.device.type == 'cuda' else -1
         device_tensor = torch.tensor(device_id, dtype=torch.int32)
         value_bytes = safetensors_save({
@@ -136,12 +144,20 @@ class MooncakeStore(KVStoreBufferBase):
         except TypeError as err:
             logger.error("Failed to put value into Mooncake Store: %s", err)
             raise TypeError("Mooncake Store Put Type Error.") from err
+        
+        timestamp = time.time()  # Unix timestamp (synchronized)
+        utc_time = datetime.datetime.utcnow().isoformat()  # Readable time
+        buffered_logger.log_event(f"ROHAN Prefill Drop Select Handler End: {timestamp} (Unix), {utc_time} (UTC)")
 
     def _get_impl(
         self,
         key: str,
     ) -> Optional[torch.Tensor]:
         """Get KVCache from Mooncake Store"""
+        timestamp = time.time()  # Unix timestamp (synchronized)
+        utc_time = datetime.datetime.utcnow().isoformat()  # Readable time
+        buffered_logger.log_event(f"ROHAN Start of Recv KV Caches: {timestamp} (Unix), {utc_time} (UTC)")
+
         try:
             data = self.store.get(key)
         except TypeError as err:
@@ -155,6 +171,11 @@ class MooncakeStore(KVStoreBufferBase):
             device_id = int(device_id_tensor.item())
             device = torch.device(
                 'cuda', device_id) if device_id >= 0 else torch.device('cpu')
+            
+            timestamp = time.time()  # Unix timestamp (synchronized)
+            utc_time = datetime.datetime.utcnow().isoformat()  # Readable time
+            buffered_logger.log_event(f"ROHAN End of Recv KV Caches: {timestamp} (Unix), {utc_time} (UTC)")
+
             return tensor.to(device)
 
         return None

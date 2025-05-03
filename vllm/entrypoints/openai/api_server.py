@@ -99,6 +99,7 @@ TIMEOUT_KEEP_ALIVE = 5  # seconds
 prometheus_multiproc_dir: tempfile.TemporaryDirectory
 
 # Cannot use __name__ (https://github.com/vllm-project/vllm/pull/4765)
+from vllm import buffered_logger
 logger = init_logger('vllm.entrypoints.openai.api_server')
 
 _running_tasks: set[asyncio.Task] = set()
@@ -166,6 +167,8 @@ async def build_async_engine_client_from_engine_args(
     vllm_config = engine_args.create_engine_config(usage_context=usage_context)
 
     # V1 AsyncLLM.
+    # buffered_logger.log_buffer(f"SHANKAR: VLLM_USAGE is {type(envs.VLLM_USE_V1)}")
+    print("SHANKAR: VLLM_USAGE is ", envs.VLLM_USE_V1)
     if envs.VLLM_USE_V1:
         if disable_frontend_multiprocessing:
             logger.warning(
