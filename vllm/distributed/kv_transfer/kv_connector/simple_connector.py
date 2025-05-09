@@ -11,6 +11,10 @@ But the logic can be extended to support other pipe and lookup buffer.
 from typing import TYPE_CHECKING, List, Optional, Tuple, Union
 
 import torch
+import torch.distributed as dist
+import os
+import time
+import datetime
 
 import vllm.envs as envs
 from vllm import _custom_ops as ops
@@ -20,6 +24,8 @@ from vllm.distributed.kv_transfer.kv_lookup_buffer.simple_buffer import (
     SimpleBuffer)
 from vllm.logger import init_logger
 from vllm.sequence import IntermediateTensors
+
+from vllm import buffered_logger
 
 if TYPE_CHECKING:
     from vllm.worker.model_runner import ModelInputForGPUWithSamplingMetadata
@@ -35,108 +41,138 @@ class SimpleConnector(KVConnectorBase):
         local_rank: int,
         config: VllmConfig,
     ):
+        
+        
+        
+        torch.distributed.destroy_process_group()
+        
+        os.environ['MASTER_ADDR'] = '127.0.0.1'
+        os.environ['MASTER_PORT'] = '8002'
+
+        assert dist.is_nccl_available()
+
+        logger.info(f"Shankar config: {config}")
+        logger.info(f"Shankar KV tranfer config: {config.kv_transfer_config}")
 
         self.config = config.kv_transfer_config
         self.tp_size = config.parallel_config.tensor_parallel_size
         self.is_deepseek_mla = config.model_config.is_deepseek_mla
         self.use_mla_opt = not envs.VLLM_MLA_DISABLE
 
-        if self.config.kv_connector == "PyNcclConnector":
-            from vllm.distributed.kv_transfer.kv_pipe.pynccl_pipe import (
-                PyNcclPipe)
-            logger.info(
-                "Initializing PyNcclConfig under kv_transfer_config %s",
-                self.config)
-        elif self.config.kv_connector == "MooncakeConnector":
-            # Check if MOONCAKE_CONFIG_PATH is set
-            import os
-            use_mooncake_distributed_pipe = os.getenv(
-                'MOONCAKE_CONFIG_PATH') is not None
-
-            if not use_mooncake_distributed_pipe:
-                raise ValueError(
-                    "To use MooncakeConnector, you need to pass the ENV: "
-                    "'MOONCAKE_CONFIG_PATH=/path/to/mooncake_config.json'.")
-            else:
-                from vllm.distributed.kv_transfer.kv_pipe.mooncake_pipe import (  # noqa: E501
-                    MooncakePipe)
-                logger.info(
-                    "Initializing MooncakeConfig under kv_transfer_config %s",
-                    self.config)
-
-        self.lookup_buffer_size = self.config.kv_buffer_size
-
-        self.producer_buffer: Optional[SimpleBuffer] = None
-        self.consumer_buffer: Optional[SimpleBuffer] = None
-
-        self.producer_data_pipe: Union[PyNcclPipe, MooncakePipe]
-        self.consumer_data_pipe: Union[PyNcclPipe, MooncakePipe]
-        self.producer_signal_pipe: Union[PyNcclPipe, MooncakePipe]
-        self.consumer_signal_pipe: Union[PyNcclPipe, MooncakePipe]
-
-        # 2 pipes for every rank in the world
-        port_offset_base = 2 * rank
-
-        # In disaggregated prefill, the prefill vLLM only uses send pipe
-        # and the decode vLLM only uses recv pipe
         if self.config.is_kv_producer:
-
-            if self.config.kv_connector == "PyNcclConnector":
-                self.producer_data_pipe = PyNcclPipe(
-                    local_rank=local_rank,
-                    config=self.config,
-                    port_offset=port_offset_base,
-                )
-                self.producer_signal_pipe = PyNcclPipe(
-                    local_rank=local_rank,
-                    config=self.config,
-                    port_offset=port_offset_base + 1,
-                    device="cpu",
-                )
-            elif self.config.kv_connector == "MooncakeConnector":
-                self.producer_data_pipe = MooncakePipe(
-                    local_rank=local_rank,
-                    config=self.config,
-                )
-                # We only need to initialize MooncakePipe once
-                self.producer_signal_pipe = self.producer_data_pipe
-
-            self.producer_buffer = SimpleBuffer(self.producer_signal_pipe,
-                                                self.producer_data_pipe,
-                                                self.config.kv_buffer_size)
-
+            dist.init_process_group("gloo", rank=self.config.kv_rank, world_size=3)
         else:
+            dist.init_process_group("gloo", rank=self.config.kv_rank, world_size=3)
 
-            # the current vLLM instance is KV consumer, so it needs to connect
-            # its recv pipe to the send pipe of KV producder
-            if self.config.kv_connector == "PyNcclConnector":
-                self.consumer_data_pipe = PyNcclPipe(
-                    local_rank=local_rank,
-                    config=self.config,
-                    port_offset=port_offset_base,
-                )
-                self.consumer_signal_pipe = PyNcclPipe(
-                    local_rank=local_rank,
-                    config=self.config,
-                    port_offset=port_offset_base + 1,
-                    device="cpu",
-                )
-            elif self.config.kv_connector == "MooncakeConnector":
-                self.consumer_data_pipe = MooncakePipe(
-                    local_rank=local_rank,
-                    config=self.config,
-                )
-                self.consumer_signal_pipe = self.consumer_data_pipe
+            
+        logger.info(f"{os.getpid()} SIMPLE CONNECTOR CREATED GROUP WITH RANK: {rank}, Local RANK: {local_rank}, and Distributed Rank {torch.distributed.get_rank()}")
 
-            self.consumer_buffer = SimpleBuffer(
-                self.consumer_signal_pipe,
-                self.consumer_data_pipe,
-                self.config.kv_buffer_size,
-            )
+        if self.config.is_kv_producer:
+            self.producer_buffer = SimpleBuffer(self.config.kv_buffer_size)
+        else:
+            self.consumer_buffer = SimpleBuffer(self.config.kv_buffer_size)
+
+    
+
+        # if self.config.kv_connector == "PyNcclConnector":
+        #     from vllm.distributed.kv_transfer.kv_pipe.pynccl_pipe import (
+        #         PyNcclPipe)
+        #     logger.info(
+        #         "Initializing PyNcclConfig under kv_transfer_config %s",
+        #         self.config)
+        # elif self.config.kv_connector == "MooncakeConnector":
+        #     # Check if MOONCAKE_CONFIG_PATH is set
+        #     import os
+        #     use_mooncake_distributed_pipe = os.getenv(
+        #         'MOONCAKE_CONFIG_PATH') is not None
+
+        #     if not use_mooncake_distributed_pipe:
+        #         raise ValueError(
+        #             "To use MooncakeConnector, you need to pass the ENV: "
+        #             "'MOONCAKE_CONFIG_PATH=/path/to/mooncake_config.json'.")
+        #     else:
+        #         from vllm.distributed.kv_transfer.kv_pipe.mooncake_pipe import (  # noqa: E501
+        #             MooncakePipe)
+        #         logger.info(
+        #             "Initializing MooncakeConfig under kv_transfer_config %s",
+        #             self.config)
+
+        # self.lookup_buffer_size = self.config.kv_buffer_size
+
+        # self.producer_buffer: Optional[SimpleBuffer] = None
+        # self.consumer_buffer: Optional[SimpleBuffer] = None
+
+        # self.producer_data_pipe: Union[PyNcclPipe, MooncakePipe]
+        # self.consumer_data_pipe: Union[PyNcclPipe, MooncakePipe]
+        # self.producer_signal_pipe: Union[PyNcclPipe, MooncakePipe]
+        # self.consumer_signal_pipe: Union[PyNcclPipe, MooncakePipe]
+
+        # # 2 pipes for every rank in the world
+        # port_offset_base = 2 * rank
+
+        # # In disaggregated prefill, the prefill vLLM only uses send pipe
+        # # and the decode vLLM only uses recv pipe
+        # if self.config.is_kv_producer:
+
+        #     if self.config.kv_connector == "PyNcclConnector":
+        #         self.producer_data_pipe = PyNcclPipe(
+        #             local_rank=local_rank,
+        #             config=self.config,
+        #             port_offset=port_offset_base,
+        #         )
+        #         self.producer_signal_pipe = PyNcclPipe(
+        #             local_rank=local_rank,
+        #             config=self.config,
+        #             port_offset=port_offset_base + 1,
+        #             device="cpu",
+        #         )
+        #     elif self.config.kv_connector == "MooncakeConnector":
+        #         self.producer_data_pipe = MooncakePipe(
+        #             local_rank=local_rank,
+        #             config=self.config,
+        #         )
+        #         # We only need to initialize MooncakePipe once
+        #         self.producer_signal_pipe = self.producer_data_pipe
+
+        #     self.producer_buffer = SimpleBuffer(self.producer_signal_pipe,
+        #                                         self.producer_data_pipe,
+        #                                         self.config.kv_buffer_size)
+
+        # else:
+
+        #     # the current vLLM instance is KV consumer, so it needs to connect
+        #     # its recv pipe to the send pipe of KV producder
+        #     if self.config.kv_connector == "PyNcclConnector":
+        #         self.consumer_data_pipe = PyNcclPipe(
+        #             local_rank=local_rank,
+        #             config=self.config,
+        #             port_offset=port_offset_base,
+        #         )
+        #         self.consumer_signal_pipe = PyNcclPipe(
+        #             local_rank=local_rank,
+        #             config=self.config,
+        #             port_offset=port_offset_base + 1,
+        #             device="cpu",
+        #         )
+        #     elif self.config.kv_connector == "MooncakeConnector":
+        #         self.consumer_data_pipe = MooncakePipe(
+        #             local_rank=local_rank,
+        #             config=self.config,
+        #         )
+        #         self.consumer_signal_pipe = self.consumer_data_pipe
+
+        #     self.consumer_buffer = SimpleBuffer(
+        #         self.consumer_signal_pipe,
+        #         self.consumer_data_pipe,
+        #         self.config.kv_buffer_size,
+        #     )
 
     def select(self, input_tokens: Optional[torch.Tensor],
                roi: Optional[torch.Tensor]) -> List[Optional[torch.Tensor]]:
 
+        #select is only called by decode instance
+        # logger.info("ROHAN: select called with %d PID", os.getpid())
+        logger.info(f"Simple Connector Select rank is: {dist.get_rank()}")
         assert self.consumer_buffer is not None, "Please initialize the "\
             "consumer buffer before calling select."
         return self.consumer_buffer.drop_select(input_tokens, roi)
@@ -144,6 +180,9 @@ class SimpleConnector(KVConnectorBase):
     def insert(self, input_tokens: torch.Tensor, roi: torch.Tensor,
                key: torch.Tensor, value: torch.Tensor,
                hidden: torch.Tensor) -> None:
+        logger.info(f"Simple Connector insert rank is: {dist.get_rank()}")
+        # insert is only called by prefill instance
+        # logger.info("ROHAN: insert called with %d PID", os.getpid())
 
         assert self.producer_buffer is not None, "Please initialize the "\
             "producer buffer before calling insert."
@@ -158,6 +197,10 @@ class SimpleConnector(KVConnectorBase):
         hidden_or_intermediate_states: Union[torch.Tensor,
                                              IntermediateTensors],
     ) -> None:
+
+        timestamp = time.time()  # Unix timestamp (synchronized)
+        utc_time = datetime.datetime.utcnow().isoformat()  # Readable time
+        buffered_logger.log_event(f"ROHAN Start of Send KV Caches: {timestamp} (Unix), {utc_time} (UTC)")
 
         input_tokens_tensor = model_input.input_tokens
         seq_lens = model_input.attn_metadata.seq_lens
@@ -233,6 +276,10 @@ class SimpleConnector(KVConnectorBase):
                                         dtype=bool), keys, values,
                         hidden_or_intermediate_states[start_pos:end_pos])
 
+        timestamp = time.time()  # Unix timestamp (synchronized)
+        utc_time = datetime.datetime.utcnow().isoformat()  # Readable time
+        buffered_logger.log_event(f"ROHAN End of Send KV Caches: {timestamp} (Unix), {utc_time} (UTC)")
+
         logger.debug("[rank%d]: KV send DONE.", torch.distributed.get_rank())
 
     def recv_kv_caches_and_hidden_states(
@@ -246,10 +293,14 @@ class SimpleConnector(KVConnectorBase):
         # request its corresponding KV cache or hidden state is missing.
         # In this case we need to do prefilling to recompute missing KV cache
         # and hidden states.
+        timestamp = time.time()  # Unix timestamp (synchronized)
+        utc_time = datetime.datetime.utcnow().isoformat()  # Readable time
+        buffered_logger.log_event(f"ROHAN Start of Recv KV Caches: {timestamp} (Unix), {utc_time} (UTC)")
+
         bypass_model_exec = True
 
         model_config = model_executable.model.config
-
+ 
         input_tokens_tensor = model_input.input_tokens
         seq_lens = model_input.attn_metadata.seq_lens
         num_prefill_tokens = model_input.attn_metadata.num_prefill_tokens
@@ -298,6 +349,12 @@ class SimpleConnector(KVConnectorBase):
             keys: torch.Tensor = ret[2]
             values: torch.Tensor = ret[3]
             hidden: torch.Tensor = ret[4]
+            
+            # logger.info(f"CONNECTOR INPUT TOKENS: {ret[0]}")
+            # logger.info(f"CONNECTOR ROI: {roi.size()}")
+            # logger.info(f"CONNECTOR KEYS: {keys.size()}")
+            # logger.info(f"CONNECTOR VALUES: {values.size()}")
+            # logger.info(f"CONNECTOR HIDDEN: {hidden.size()}")
 
             num_computed_tokens = roi.shape[0]
             num_computed_tokens_list.append(num_computed_tokens)
@@ -306,6 +363,9 @@ class SimpleConnector(KVConnectorBase):
             # If not, need to redo the forwarding to compute missing states
             if not all([(num_computed_tokens == num_tokens), hidden is not None
                         ]):
+                logger.info(f"NUM COMPUTED TOKENS: {num_computed_tokens}")
+                logger.info(f"NUM TOKENS: {num_tokens}")
+                logger.info(f"HIDDEN: {hidden}")
                 bypass_model_exec = False
 
             # update the end position based on how many tokens are cached.
@@ -367,14 +427,20 @@ class SimpleConnector(KVConnectorBase):
             hidden_or_intermediate_states = torch.cat(
                 hidden_or_intermediate_states_for_one_req, dim=0)
 
+
+        timestamp = time.time()  # Unix timestamp (synchronized)
+        utc_time = datetime.datetime.utcnow().isoformat()  # Readable time
+        logger.info(f"ROHAN End of Recv KV Caches: {timestamp} (Unix), {utc_time} (UTC)")
+        buffered_logger.log_event(f"ROHAN End of Recv KV Caches: {timestamp} (Unix), {utc_time} (UTC)")
         return hidden_or_intermediate_states, bypass_model_exec, model_input
 
     def close(self):
-        self.producer_data_pipe.close()
-        self.consumer_data_pipe.close()
+        # self.producer_data_pipe.close()
+        # self.consumer_data_pipe.close()
         if self.config.kv_connector == "PyNcclConnector":
-            self.producer_signal_pipe.close()
-            self.consumer_signal_pipe.close()
+            # self.producer_signal_pipe.close()
+            # self.consumer_signal_pipe.close()
+            pass
         elif self.config.kv_connector == "MooncakeConnector":
             # MooncakePipe reuses data_pipe for signal_pipe, so we only have to
             # close the data_pipe.
